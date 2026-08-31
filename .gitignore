@@ -1,0 +1,56 @@
+# ---- Python ----
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Databases (runtime artifacts) ----
+*.db
+*.sqlite3
+*.sqlite
+
+# ---- Generated synthetic data (regenerate with src/data_generation/generate_synthetic_data.py) ----
+data/*.csv
+
+# ---- Models (optional: uncomment to ignore trained artifacts)
+# models/*.json
+# models/*.txt
+
+# ---- Generated reports/figures (uncomment to ignore)
+# reports/figures/
+
+# ---- Logs ----
+logs/
+*.log
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Editor / OS ----
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- Node (frontend has its own .gitignore; mirrored here as a fallback) ----
+frontend/node_modules/
+frontend/dist/
