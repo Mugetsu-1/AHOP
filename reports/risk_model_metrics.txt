@@ -1,0 +1,5 @@
+ICU Escalation Risk Classifier (XGBoost) - Test Metrics
+============================================================
+ROC-AUC = 0.8211
+PR-AUC  = 0.6033
+Positive rate (test) = 22.00%

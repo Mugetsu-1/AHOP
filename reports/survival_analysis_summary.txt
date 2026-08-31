@@ -1,0 +1,42 @@
+Patients loaded: 189,222 rows
+Columns: patient_id, mrn, arrival_datetime_utc, arrival_hour, day_of_week, is_surge_arrival, age, gender, esi_level, chief_complaint_category, comorbidity_index, heart_rate, sys_bp, dia_bp, spo2, temp_c, lactate, los_hours, ed_wait_time_min, is_isolation_required, icu_escalation_flag
+
+[KM] Median LOS (hours) by ESI level:
+  ESI 1: 12.82 h
+ESI 2: 7.69 h
+ESI 3: 4.23 h
+ESI 4: 2.10 h
+ESI 5: 1.16 h
+
+[KM] Pairwise log-rank tests (H0: identical survival curves):
+       test_statistic    p  -log2(p)
+1 2       3572.6907  0.0       inf
+  3      12745.2394  0.0       inf
+  4      22067.2767  0.0       inf
+  5      24126.5297  0.0       inf
+2 3      12662.8867  0.0       inf
+  4      40203.5353  0.0       inf
+  5      56007.7066  0.0       inf
+3 4      16960.9714  0.0       inf
+  5      37580.5409  0.0       inf
+4 5       4242.9664  0.0       inf
+
+[KM] Global log-rank test across all ESI strata:
+  chi2=98111.983, p=0.000e+00
+
+[Cox PH] Model summary (baseline = no covariates):
+  Log-likelihood ratio test: p=0.000e+00
+  C-index: 0.7156
+
+[Cox PH] Hazard ratio table (exp(coef)) with 95% CI and p-values:
+               coef  exp(coef) HR  exp(coef) 95% CI lower  exp(coef) 95% CI upper       p
+covariate                                                                              
+age        0.0000        1.0000                  0.9998                  1.0002  0.9043
+esi_level  0.7203        2.0550                  2.0430                  2.0671  0.0000
+sys_bp     0.0002        1.0002                  0.9999                  1.0005  0.1286
+lactate   -0.0030        0.9970                  0.9931                  1.0009  0.1298
+
+[Cox PH] Interpretation: HR > 1 increases discharge hazard (shorter LOS);
+  HR < 1 decreases discharge hazard (longer LOS).
+
+[OK] Figures + summary written under D:\AHOP\reports

@@ -1,0 +1,5 @@
+Arrival Forecasting (LightGBM) - Test Set Metrics
+============================================================
+t+ 1h  MAE=2.793  RMSE=3.754  WAPE=25.41%
+t+ 6h  MAE=2.784  RMSE=3.738  WAPE=25.33%
+t+24h  MAE=2.801  RMSE=3.783  WAPE=25.47%
