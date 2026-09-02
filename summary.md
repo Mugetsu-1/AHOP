@@ -1,277 +1,168 @@
-# AHOP — Emergency Department Bed Allocation & Forecasting System
+# AHOP — Absolute-Detail Technical Summary
 
-Absolute-detail technical summary, grounded in the current codebase at `D:\AHOP`.
+Full-stack ED bed allocation and forecasting decision-support demo, restructured into a realtime-only `backend/` layout and verified end-to-end via a WebSocket proxy. This file is the authoritative spec: read it before touching the realtime contract, the replay engine, or the frontend event handling.
 
----
-
-## 1. Project Overview
-
-AHOP is a decision-support system that helps hospital emergency departments (ED) decide **which patient should be placed in which bed**, given:
-
-- a live estimate of each patient's **ICU escalation risk** (XGBoost classifier + SHAP explanations),
-- a forecast of **hourly patient arrivals** for the next 24 hours (LightGBM time-series model),
-- a **bed inventory** with unit, telemetry and isolation capabilities, and
-- a **Mixed-Integer Linear Program (MILP)** that assigns patients to beds while respecting hard clinical constraints and minimizing wait time, unit mismatch, and transfer distance.
-
-The system is a full-stack app: FastAPI backend (REST + SQLite), React/Vite/Tailwind dashboard, plus a Python analytics/simulation workspace. All data is **synthetically generated** (no real PHI).
+**Stack:** Python 3.14 · FastAPI + Uvicorn · PuLP + HiGHS · pandas / NumPy · React 19 + Vite 8 + Tailwind 4 · pytest
 
 ---
 
-## 2. Architecture
+## 1. System Architecture
 
 ```
-data/  ──►  training scripts  ──►  models/  ──►  FastAPI app  ──►  React dashboard
-  │            (src/ml,                    │         │
-  │             src/analysis,              │         └─ SQLite (ahop.db)
-  │             src/data_generation)       │
-  └────────────────────────────────────────┴─► reports/ (metrics + figures)
+data/replay_events.csv                MIMIC-derived replay rows (197 events)
+        │  (produced by backend/streamer/mimic_replay_mapping.py)
+        ▼
+backend/streamer/live_telemetry_replay.py     LiveTelemetryReplay — advance_to(clock_min)
+        │  emits raw events: arrival / discharge / telemetry
+        ▼
+backend/app/realtime.py                       LiveReplayHub (module-level singleton `hub`)
+        │  in-memory ED mirror: patients, queue, beds, forecasts
+        │  maps wire types: arrival→PATIENT_ARRIVED, discharge→PATIENT_DISCHARGED,
+        │                   telemetry→telemetry; emits clock/snapshot/queue_update
+        │  live allocation via backend/ml/bed_allocation_solver.py (MILP, PuLP + HiGHS)
+        ▼
+backend/app/routers/realtime.py               WS /realtime/ws + REST /realtime/status, /realtime/control
+        │  every WS message is the envelope {type, payload}
+        ▼
+frontend/src/realtime.js                      envelope-aware WebSocket client
+        ▼
+frontend/src/components/*.jsx                 React 19 dashboard panels
 ```
 
-- **Data layer:** `data/patient_clinical_records.csv` (189,222 rows) and `data/ed_hourly_arrivals.csv` (17,520 rows).
-- **ML/analytics workspace:** `src/` — synthetic data generation, forecasting + risk model training/evaluation, survival analysis, EDA, and the MILP solver.
-- **Trained artifacts:** `models/encoders.json`, `models/xgboost_icu.json`, `models/lightgbm_arrival_t1h.txt`, `lightgbm_arrival_t6h.txt`, `lightgbm_arrival_t24h.txt`.
-- **Service layer:** FastAPI app in `app/` (models, schemas, routers, services), DB seed in `app/seed.py`.
-- **Runtime DB:** SQLite at `D:\AHOP\ahop.db` (created on startup or by seed).
-- **Presentation:** React SPA in `frontend/` talking to `/api/v1/*`.
+- No database. All state is a process-level singleton `LiveReplayHub` (`backend/app/realtime.py`) that imports lazily (no background task on import, so tests never spawn one). The replay task starts on the first WS connection or an explicit control call.
+- The hub reuses the same MILP solver as the REST path, applied to the hub's in-memory queue.
 
----
-
-## 3. Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Runtime | Python 3.14 (`cpython-314`), Windows/PowerShell |
-| Backend | FastAPI + Uvicorn, Pydantic v2 (`model_validator`) |
-| ORM/DB | SQLAlchemy 2, SQLite (`check_same_thread=False`) |
-| Optimization | PuLP + HiGHS solver |
-| ML | XGBoost, LightGBM, scikit-learn, SHAP |
-| Survival | lifelines (Kaplan-Meier + Cox PH) |
-| Frontend | React 19, Vite 8, Tailwind CSS 4 (`@tailwindcss/vite`), oxlint |
-| Testing | pytest (5 passing smoke tests) |
-
----
-
-## 4. Repository Layout
-
-```
-D:\AHOP\
-├── app/
-│   ├── main.py                  # FastAPI app, CORS, router mounting, startup table creation
-│   ├── config.py                # env-driven settings (see §8)
-│   ├── database.py              # engine, SessionLocal, Base, get_db()
-│   ├── models.py                # Patient, TriageEvent, Bed, BedAllocation
-│   ├── schemas.py               # Pydantic request/response models
-│   ├── routers/
-│   │   ├── triage.py            # POST /api/v1/triage/assess
-│   │   ├── allocation.py        # POST /api/v1/allocation/optimize
-│   │   └── dashboard.py         # GET /api/v1/dashboard/metrics
-│   ├── services/
-│   │   ├── icu_risk.py          # XGBoost risk inference + chief-complaint categorization
-│   │   ├── forecast.py          # LightGBM arrival forecast (recursive t+1h model)
-│   │   └── allocation.py        # MILP orchestration, risk tiers, pending-patient queries
-│   └── seed.py                  # DB bootstrap (beds + 189k synthetic patients/triage events)
-├── src/
-│   ├── data_generation/generate_synthetic_data.py
-│   ├── ml/bed_allocation_solver.py      # MILP (standalone CLI + library)
-│   ├── ml/forecasting_and_risk.py       # LightGBM + XGBoost training/eval, figures
-│   └── analysis/survival_analysis.py, eda_analysis.py
-├── models/                      # trained artifacts (encoders.json, xgboost_icu.json, 3× lightgbm)
-├── data/                        # patient_clinical_records.csv, ed_hourly_arrivals.csv
-├── reports/                     # metrics JSON/TXT + figures/ (9 artifacts)
-├── docs/                        # SAD_REPORT.md, IEEE_PAPER.md
-├── tests/test_api.py            # 5 API smoke tests
-├── frontend/                    # React dashboard (src/, vite.config.js, package.json)
-├── requirements.txt, ahops.db, README.md, summary.md
-```
-
----
-
-## 5. Data Pipeline
-
-### 5.1 Synthetic generator (`src/data_generation/generate_synthetic_data.py`)
-- `SEED = 42`, 2 years of hourly timesteps starting `2024-01-01 00:00:00 UTC`.
-- 17,520 hourly timesteps; ~250 ED visits/day on average → **189,222 patient records**.
-- ESI acuity distribution: `{1: 0.05, 2: 0.20, 3: 0.45, 4: 0.20, 5: 0.10}`.
-- Chief-complaint categories: Cardiovascular, Respiratory, Trauma, Gastrointestinal, General.
-- Hourly arrivals, daily/weekly/monthly seasonality, surge flags (`is_surge_arrival`, `surge_type`).
-
-### 5.2 Patient dataset (`data/patient_clinical_records.csv` — 189,222 rows × 21 cols)
-```
-patient_id, mrn, arrival_datetime_utc, arrival_hour, day_of_week, is_surge_arrival,
-age, gender, esi_level, chief_complaint_category, comorbidity_index,
-heart_rate, sys_bp, dia_bp, spo2, temp_c, lactate,
-los_hours, ed_wait_time_min, is_isolation_required, icu_escalation_flag
-```
-Example row: `181e291a-…, MRN104332181, 2025-12-21 20:00:00, 20, 6, 0, 64, M, 4, General, 1, 102.0, 142.0, 68.0, 99.7, 37.5, 4.01, 5.02, 178, 0, 0`.
-
-### 5.3 Arrival dataset (`data/ed_hourly_arrivals.csv` — 17,520 rows × 6 cols)
-```
-timestamp_utc, hour_of_day, day_of_week, month, arrivals, is_surge, surge_type
-2024-01-01 00:00:00+00:00, 0, 0, 1, 11, 0, NONE
-```
-
-### 5.4 Seeding (`app/seed.py`)
-- CLI: `python -m app.seed` (use `--seed --reset` to rebuild from scratch).
-- Bed plan (800 beds):
-  | Unit | Beds | Type |
-  |---|---|---|
-  | ICU_NORTH | 60 | ICU |
-  | ICU_SOUTH | 40 | ICU |
-  | TELEMETRY_WEST | 100 | Telemetry |
-  | TELEMETRY_EAST | 100 | Telemetry |
-  | GENERAL_1…4 | 120/120/130/130 | General |
-- Bed IDs: `{ICU|TELE|GEN}-{NNN}`. Telemetry-equipped if prefix ICU/TELE; isolation-capable if `index % 5 < 2`.
-- `seed_clinical` reads the CSV, scores each row with `score_frame()` (XGBoost), writes Patient + TriageEvent rows in chunks of 5,000.
-
----
-
-## 6. Database Schema (SQLite `ahop.db`)
-
-- **`patients`** — `patient_id` String(36) PK (uuid4), `mrn` unique nullable, `age`, `gender`, `is_isolation_required` bool default False, `created_at` (UTC).
-- **`triage_events`** — composite PK `(event_id, recorded_at)`; `patient_id` FK → patients; `esi_level`, `chief_complaint` String(255) non-null, `heart_rate`, `sys_bp`, `dia_bp`, `spo2`, `temp_c`, `icu_escalation_prob`, `recorded_at`.
-- **`beds`** — `bed_id`, `unit_name`, `bed_number`, `status` (`OCCUPIED`/else available), telemetry + isolation capability flags.
-- **`bed_allocations`** — one row per assigned patient linking patient → bed.
-
----
-
-## 7. ML / Analytics Methodology
-
-### 7.1 ICU escalation risk (XGBoost) — `src/ml/forecasting_and_risk.py`, `app/services/icu_risk.py`
-- Target: `icu_escalation_flag` — a 12-hour deterioration proxy.
-- 16 features (`FEATURE_COLS`): age, gender_enc, esi_level, chief_complaint_enc, comorbidity_index, heart_rate, sys_bp, dia_bp, spo2, temp_c, lactate, ed_wait_time_min, is_isolation_required, arrival_hour, day_of_week, is_surge_arrival.
-- Chief-complaint keyword categorizer (Cardiovascular: chest/cardiac/palpitation/heart/angina; Respiratory: breath/respir/asthma/cough/wheeze/pneumonia; Trauma: trauma/fall/injury/fracture/laceration/burn/accident; Gastrointestinal: abdominal/abdomen/nausea/vomit/diarrhea/gi/stomach; else "General").
-- Model: `models/xgboost_icu.json` + `models/encoders.json`; explanation via SHAP TreeExplainer (`shap_summary.png`).
-- **Metrics:** ROC-AUC **0.8211**, PR-AUC **0.6033**, positive rate **22.00%** (`reports/risk_model_metrics.txt`, `reports/figures/icu_risk_roc_pr.png`).
-
-### 7.2 Arrival forecasting (LightGBM) — `app/services/forecast.py`
-- Trained per horizon: `lightgbm_arrival_t1h/t6h/t24h.txt` (API uses the t+1h model recursively for the next 24h).
-- Features: arrivals at lag 1h/24h/168h, rolling mean 6h, rolling std 24h, hour, weekday, month, `is_surge` (=0).
-- **Metrics** (`reports/forecasting_metrics.json` / `.txt`):
-  | Horizon | MAE | RMSE | WAPE |
-  |---|---|---|---|
-  | t+1h | 2.7931 | 3.7543 | 25.41% |
-  | t+6h | 2.7842 | 3.7385 | 25.33% |
-  | t+24h | 2.8006 | 3.7827 | 25.47% |
-- Figure: `reports/figures/arrival_forecast_all_horizons.png`; heatmap `arrival_heatmap.png|html`.
-
-### 7.3 Survival / LOS analysis — `src/analysis/survival_analysis.py`
-- Dataset: 189,222 rows, 21 columns.
-- Kaplan-Meier median LOS by ESI: ESI1 **12.82h**, ESI2 **7.69h**, ESI3 **4.23h**, ESI4 **2.10h**, ESI5 **1.16h**.
-- Pairwise + global log-rank: χ² = **98111.983**, p = 0 (all strata).
-- Cox PH: C-index **0.7156**; HRs — ESI 2.055 (p=0), age 1.000 (p=0.9043), sys_bp 1.0002 (p=0.1286), lactate 0.997 (p=0.1298).
-- Figures: `km_curves_by_esi.png`, `door_to_bed_latency_by_esi.png`, `vital_los_correlation.png|html`.
-
----
-
-## 8. Optimization — MILP Bed Allocation
-
-### 8.1 Problem formulation (`src/ml/bed_allocation_solver.py`)
-- Variables: binary `x_{i,j}` = patient `i` assigned to bed `j`.
-- **Objective:** minimize `Σ (w₁·WaitCost + w₂·MismatchPenalty + w₃·TransferDistance)`
-  with weights **wait 1.0 / mismatch 5.0 / distance 1.5**.
-- **Constraints:**
-  - each patient assigned to ≤ 1 bed: `Σ_j x_ij ≤ 1`
-  - each bed used ≤ 1 time: `Σ_i x_ij ≤ 1`
-  - **hard acuity floor:** `icu_risk > τ` ⇒ ICU-only bed
-  - **hard isolation** for isolation-required patients
-  - **soft telemetry penalty** (encourages telemetry beds for medium risk)
-- Scale reduction via identical-bed capacity aggregation (~313k → ~58k variables).
-- Solver: PuLP + HiGHS. CLI: `python src/ml/bed_allocation_solver.py [--inputs patients.json beds.json --output result.json]`.
-- `app/services/allocation.py` wires this to the API: risk tiers (`≥0.5` HIGH, `≥0.25` MEDIUM, else LOW), unit typing (ICU/TELE→Telemetry/General), pending-patient lookback window (`WAITLIST_LOOKBACK_HOURS=48`), excluding already-allocated ids. `max_solver_time_sec`/`enforce_strict_isolation` are accepted and reported but do not change the solve (hard isolation is always enforced).
-
-### 8.2 Current report (`reports/bed_allocation_result.json`)
-- Top-level keys: `assignments`, `unassigned`, `objective`, `solve_time_s`, `status`.
-- **500 assignments, status `Optimal`, solve time 0.36 s.**
-- Assignment fields: `patient_id, bed_id, unit_type, icu_risk, esi_level, isolation_required, wait_minutes, telemetry, isolation_capable`.
-- Samples: P0001→B0144 (General, risk 0.02, ESI4, wait 35); P0003→B0271 (ICU, risk 0.3933, ESI3, wait 147); P0004→B0015 (Telemetry, risk 0.3443, ESI3, isolation); P0006→B0104 (ICU, risk 0.6139, ESI2, isolation, wait 199); P0500→B0632 (General, risk 0.0789, ESI3, isolation, wait 254).
-
----
-
-## 9. Backend API
-
-Base URL: `http://127.0.0.1:8000` (docs at `/docs`). All endpoints under `/api/v1`.
-
-### `GET /health`
-`{"status": "ok"}`
-
-### `POST /api/v1/triage/assess`
-Body (Pydantic v2; nested `vitals` merged into flat fields via `model_validator(mode="before")`):
-```json
-{
-  "patient_id": "P999", "age": 64, "gender": "M", "esi_level": 3,
-  "chief_complaint_category": "Cardiovascular", "comorbidity_index": 1,
-  "arrival_hour": 14, "day_of_week": 2, "is_surge_arrival": 0,
-  "vitals": {"heart_rate": 102, "sys_bp": 142, "dia_bp": 68, "spo2": 97, "temp_c": 37.5}
-}
-```
-Validation: age `0–120`, esi_level `1–5`, comorbidity_index `≥ 0`. Missing vitals → **422**.
-Behavior: computes risk via `predict_icu_risk`; creates the Patient if unknown; records a TriageEvent with `icu_escalation_prob`; returns `{patient_id, icu_escalation_probability, risk_category, recommended_unit, shap_factors: [{feature, impact}]}`.
-
-### `POST /api/v1/allocation/optimize`
-Body: `{"max_solver_time_sec": 2.0, "enforce_strict_isolation": true}`.
-Returns `{solver_status, execution_time_ms, assignments_made, allocations}`. Internal errors → **500** with detail.
-
-### `GET /api/v1/dashboard/metrics`
-Returns:
-- `bed_occupancy`: `total_beds`, `occupied_beds`, `available_beds`, `occupancy_pct` (1 dp), `by_unit[{unit_name, total, occupied, available}]` (sorted).
-- `arrival_forecast`: `actual[]` + `predicted[]` series of `{timestamp, value}` points.
-- `last_updated_utc`: ISO 8601 UTC.
-
-### Config (`app/config.py` — env vars)
-| Env | Default |
-|---|---|
-| `AHOP_DATA_DIR` | `<project>/data` |
-| `AHOP_MODELS_DIR` | `<project>/models` |
-| `AHOP_REPORTS_DIR` | `<project>/reports` |
-| `DATABASE_URL` | `sqlite:///<project>/ahop.db` |
-| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` |
-| `ICU_RISK_THRESHOLD` | 0.5 |
-| `TELEMETRY_RISK_THRESHOLD` | 0.25 |
-| `SOLVER_TIME_BUDGET_SEC` | 2.0 |
-| `WAITLIST_LOOKBACK_HOURS` | 48 |
-
----
-
-## 10. Frontend (`frontend/`)
-
-- React 19 + Vite 8 + Tailwind CSS 4 + oxlint (`npm run lint`). Scripts: `dev`, `build`, `preview`.
-- `src/main.jsx` → `App.jsx` (header + 3 panels, 60 s auto-refresh).
-- `src/api.js` — `getMetrics()`, `runAllocation(maxSolverTimeSec=2.0, enforceStrictIsolation=true)`, `assessTriage(payload)`; shared fetch wrapper surfacing `res.detail`.
-- Components: `BedMatrix.jsx` (occupancy grid), `InflowChart.jsx` (actual vs predicted arrivals), `TriageQueue.jsx` (waiting patients).
-
----
-
-## 11. Tests
-
-`tests/test_api.py` — sets default env to `../data` and `../models` relative to the tests dir, then:
-- `test_health` — `GET /health` returns `{"status": "ok"}`.
-- `test_triage_assess` — full nested-vitals payload; asserts `patient_id`, `icu_escalation_probability ∈ [0,1]`, `risk_category`, `recommended_unit`, `shap_factors`.
-- `test_triage_assess_missing_vitals_422` — missing vitals → 422.
-- **5 tests, all passing** (`pytest -q`).
-
----
-
-## 12. Run Instructions
+## 2. Run Commands (repo root `D:\AHOP`)
 
 ```powershell
-# one-time
-D:\AHOP\.venv\Scripts\python.exe -m pip install -r requirements.txt
-D:\AHOP\.venv\Scripts\python.exe -m app.seed --reset
-cd D:\AHOP\frontend; npm install
+# backend
+D:\AHOP\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
 
-# terminal 1 — backend
-D:\AHOP\.venv\Scripts\python.exe -m uvicorn app.main:app --reload   # → http://127.0.0.1:8000
+# frontend
+cd D:\AHOP\frontend; npm install; npm run dev        # http://localhost:5173
 
-# terminal 2 — frontend
-cd D:\AHOP\frontend; npm run dev                                     # → http://localhost:5173
+# tests
+D:\AHOP\.venv\Scripts\python.exe -m pytest -q         # backend/tests — 6 passing
+cd D:\AHOP\frontend; npm run lint                     # oxlint — 0 warnings / 0 errors
+cd D:\AHOP\frontend; npm run build                    # vite → frontend/dist/
 ```
 
----
+Notes:
+- Use the repo venv — the system Python only has numpy.
+- The app is replay-driven; no database seeding.
+- If port 8000 is held by a stale worker, kill the owning PID from `Get-NetTCPConnection -LocalPort 8000`.
 
-## 13. Known Limitations / Future Work
+## 3. WebSocket Contract (authoritative)
 
-- Arrival forecast model is TFT (Temporal Fusion Transformer) discussed as SOTA future work; current production model is LightGBM (recursive t+1h).
-- `max_solver_time_sec` / `enforce_strict_isolation` are accepted but not wired to solver behavior (hard isolation is always enforced); wiring them as configurable knobs is pending.
-- SQLite is for local/dev; a production deployment would move to PostgreSQL (SQLAlchemy is DB-agnostic).
-- All data is synthetic — the models and numbers are for demonstration/architecture validation, not clinical use.
-- API forecast endpoint uses only the t+1h LightGBM model recursively, not the trained t6h/t24h checkpoints.
+Endpoint: `ws://127.0.0.1:8000/api/v1/realtime/ws`
+
+**Every message** is the envelope `{ "type": <str>, "payload": <object> }`. Frame-counting and the frontend gate on the outer `type`.
+
+### 3.1 Connect handshake
+On accept, the hub sends, in order:
+1. `hello` — payload is the clock payload (below).
+2. `snapshot` — full current state (below).
+
+The hub then `start()`s the replay task.
+
+### 3.2 Message types
+
+| type | frequency | payload |
+|---|---|---|
+| `hello` | once on connect | clock payload |
+| `clock` | every tick (1s real) | clock payload |
+| `snapshot` | on reset; after any allocation batch | `{clock, queue[], admitted[], beds[], bed_summary, forecast, events_sent, allocations_made}` |
+| `queue_update` | after each event batch | `{queue: [...]}` (patient views) |
+| `PATIENT_ARRIVED` | on arrival | raw replay arrival event |
+| `telemetry` | per admitted patient every 5 sim-min | `{type:"telemetry", patient_id, sim_min, vitals}` |
+| `PATIENT_DISCHARGED` | on discharge | raw replay discharge event |
+| `BED_ALLOCATED` | one per placement | `{patient_id, bed_id, unit_name, bed_number}` |
+
+### 3.3 Clock payload keys
+`sim_min` (float), `sim_iso` (ISO-8601, rebased epoch `2000-01-01T00:00Z`), `speed`, `paused`, `running`, `patients_in_ed`, `patients_seen`, `discharged`, `arrivals_remaining`, `total_patients`.
+
+### 3.4 Snapshot payload keys
+- `clock` — clock payload
+- `queue` / `admitted` — arrays of patient views
+- `beds` — array of bed dicts (`bed_id, unit_name, bed_number, is_telemetry_equipped, is_isolation_capable, status`)
+- `bed_summary` — `{total: 800, occupied, available}`
+- `forecast` — `{actual[{t,value}], predicted[{t,value,lower,upper}], residual_std}` (24 hourly buckets, CI = value ± 1.96·std, refresh every 60 ticks)
+- `events_sent`, `allocations_made` — counters
+
+### 3.5 Patient view keys
+`patient_id, mrn, esi_level, gender, chief_complaint, icu_escalation_flag, icu_risk, risk_tier, isolation_required, arrival_min, discharge_min, wait_minutes, admitted, bed_id, unit_name, bed_number, vitals`.
+
+### 3.6 Raw event payloads (arrival / telemetry / discharge)
+These are forwarded verbatim from the replay engine and therefore carry a nested `"type"` key in the payload (e.g. `payload.type == "arrival"`). Consumers should key on the **outer** envelope type.
+
+- `PATIENT_ARRIVED` payload: `{type:"arrival", patient_id, mrn, esi_level, gender, chief_complaint, disposition, icu_escalation_flag, arrival_min, discharge_min, sim_min, vitals}`
+- `telemetry` payload: `{type:"telemetry", patient_id, sim_min, vitals}`
+- `PATIENT_DISCHARGED` payload: `{type:"discharge", patient_id, discharge_min, sim_min, disposition, icu_escalation_flag}`
+
+`vitals` keys: `temperature_c, resprate, pain, heartrate, sbp, dbp, o2sat`.
+
+## 4. REST API (`/api/v1/realtime`)
+
+- `GET /health` → `{"status": "ok"}`
+- `GET /realtime/status` → **flat dict** (NOT the envelope): clock payload keys plus `queue_length, admitted, available_beds, total_beds, events_sent, allocations_made`.
+- `POST /realtime/control` — body `{"action": <str>, "speed": <float|None>}` where `action ∈ {start, pause, resume, reset, speed}`. Returns the same flat status dict.
+  - `speed` requires `speed` > 0 (400 if missing); `0 < speed ≤ 100` (schema bound `gt=0, le=100`). Unknown action → 422.
+  - Frontend pattern: `clock`/`hello` → `setClock(msg.payload)` guarded by `if (res?.sim_iso)`; `snapshot` → `setSnapshot(msg.payload)` and mirror clock; `queue_update` → merge queue; `PATIENT_ARRIVED` / `telemetry` / `PATIENT_DISCHARGED` / `BED_ALLOCATED` → capped event feed (MAX_EVENTS=60).
+
+## 5. Replay Engine (`backend/streamer/live_telemetry_replay.py`)
+
+- Loads `data/replay_events.csv`, sorts by `arrival_min`, keeps a rebased sim clock (sim-minute 0 == earliest ED visit).
+- `step()` advances the clock by `speed` sim-minutes per call; `advance_to(clock_min)` emits events in order **arrivals → discharges → telemetry**.
+- Defaults: `tick_seconds=1.0`, `speed=1.0`, `telemetry_interval_min=5.0`, `rng_seed=42`.
+- Vitals drift each telemetry sample with seeded noise clipped to `VITAL_BOUNDS`.
+- `data/replay_events.csv`: 198 lines incl. header → **197 events** (matches `total_patients`).
+- The demo timeline is intentionally sparse — most ticks emit nothing but a clock tick. Do not "fix" this.
+
+## 6. Live Risk & Allocation (`backend/app/realtime.py`)
+
+- ICU risk proxy (no XGBoost at runtime): `ESI_BASE_RISK {1:0.85, 2:0.55, 3:0.30, 4:0.12, 5:0.05}` + `0.15` escalation bump, capped 0.95.
+- Risk tier: `icu_risk ≥ 0.5` → HIGH, `≥ 0.25` → MEDIUM, else LOW (thresholds are env-configurable).
+- Isolation required: `crc32(patient_id) % 10 == 0`.
+- Bed plan (800 beds, in-memory, id `{unit}:{idx:03d}`, number `{prefix}-{idx:03d}`):
+  - ICU_NORTH 60, ICU_SOUTH 40, TELEMETRY_WEST 100, TELEMETRY_EAST 100, GENERAL_1 120, GENERAL_2 120, GENERAL_3 130, GENERAL_4 130.
+  - Telemetry-equipped prefixes: ICU, TELE. Isolation-capable: `idx % 5 < 2`.
+
+## 7. MILP Solver (`backend/ml/bed_allocation_solver.py`)
+
+- PuLP + HiGHS. Objective weights: wait penalty 1.0, acuity mismatch 5.0, distance 1.5, plus soft penalties for medium-risk→General and low-risk→higher-acuity placements, with a slack penalty above any placement.
+- Acuity floor: patients above the ICU threshold may only go to ICU beds.
+- Capacity classes aggregate to ~58k candidate pairs (from ~313k raw), keeping the solve fast.
+- Demo run: 500 assignments from 800 beds — **Optimal, 0.36 s**.
+
+## 8. Frontend (`frontend/`)
+
+- React 19 + Vite 8 + Tailwind 4. Panels: `LiveQueue`, `LiveBeds`, `InflowChart` (forecast), `EventFeed` (capped at 60 events).
+- `realtime.js` is the envelope-aware WS client — connect once, dispatch on `msg.type`, mirror `snapshot`/`clock` into state.
+- Lint: oxlint clean. Build: vite production build clean (`frontend/dist/`).
+
+## 9. E2E Verification (`e2e_proxy.py`, repo root)
+
+```powershell
+D:\AHOP\.venv\Scripts\python.exe e2e_proxy.py --seconds 15 --min-events 4 --reset-before --speed 20
+```
+
+- Connects to the WS **first**, then POSTs control `reset` (and an optional `--speed N`) — the ordering makes the run deterministic.
+- Asserts the full lifecycle within the window: `PATIENT_ARRIVED`, telemetry, `BED_ALLOCATED`, `PATIENT_DISCHARGED`, and validates the snapshot and `BED_ALLOCATED` payload contracts.
+- Expected result: `RESULT: PASS` with envelope-frame and per-type event counts.
+- Base URL derived from the WS url (`ws://`→`http://`, strip `/api/v1/realtime/ws`).
+
+## 10. Config (env vars)
+
+| var | default |
+|---|---|
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` |
+| `ICU_RISK_THRESHOLD` | `0.5` |
+| `TELEMETRY_RISK_THRESHOLD` | `0.25` |
+
+## 11. Test Matrix (`backend/tests/test_api.py`)
+
+`/health` · `/realtime/status` (keys + `total_beds == 800`) · control `speed` · control `speed` missing → 400 · control invalid action → 422 · control `pause`/`resume` round-trip. All pass.
+
+## 12. Disclaimer
+
+Demo/prototype only — replay data derived from MIMIC-IV demo; not for clinical use.

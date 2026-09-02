@@ -24,16 +24,6 @@ htmlcov/
 *.sqlite3
 *.sqlite
 
-# ---- Generated synthetic data (regenerate with src/data_generation/generate_synthetic_data.py) ----
-data/*.csv
-
-# ---- Models (optional: uncomment to ignore trained artifacts)
-# models/*.json
-# models/*.txt
-
-# ---- Generated reports/figures (uncomment to ignore)
-# reports/figures/
-
 # ---- Logs ----
 logs/
 *.log

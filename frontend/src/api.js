@@ -18,20 +18,9 @@ async function request(path, options = {}) {
   return res.json()
 }
 
-export function getMetrics() {
-  return request('/api/v1/dashboard/metrics')
-}
-
-export function runAllocation(maxSolverTimeSec = 2.0, enforceStrictIsolation = true) {
-  return request('/api/v1/allocation/optimize', {
+export function sendControl(action, speed) {
+  return request('/api/v1/realtime/control', {
     method: 'POST',
-    body: JSON.stringify({ max_solver_time_sec: maxSolverTimeSec, enforce_strict_isolation: enforceStrictIsolation }),
-  })
-}
-
-export function assessTriage(payload) {
-  return request('/api/v1/triage/assess', {
-    method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(action === 'speed' && speed != null ? { action, speed } : { action }),
   })
 }

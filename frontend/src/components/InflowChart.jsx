@@ -11,6 +11,10 @@ export default function InflowChart({ forecast }) {
     const points = [...(actual ?? []), ...(predicted ?? [])]
     if (points.length === 0) return null
     const values = points.map((p) => p.value)
+    for (const p of predicted ?? []) {
+      if (p.lower != null) values.push(p.lower)
+      if (p.upper != null) values.push(p.upper)
+    }
     const max = Math.max(...values, 1)
     const min = Math.min(...values, 0)
     const range = max - min || 1
@@ -26,7 +30,23 @@ export default function InflowChart({ forecast }) {
     const actualPath = actual && actual.length ? path(actual, 0) : ''
     const predictedPath = predicted && predicted.length ? path(predicted, actual?.length ?? 0) : ''
 
-    return { points, max, min, actualPath, predictedPath, actualLen: actual?.length ?? 0 }
+    const hasBands = (predicted ?? []).some((p) => p.lower != null && p.upper != null)
+    const bandPath = hasBands
+      ? (() => {
+          const pts = predicted
+          const startIdx = actual?.length ?? 0
+          const top = pts
+            .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(startIdx + i).toFixed(1)},${y(p.upper).toFixed(1)}`)
+            .join(' ')
+          const bottom = [...pts]
+            .reverse()
+            .map((p, i) => `L${x(startIdx + pts.length - 1 - i).toFixed(1)},${y(p.lower).toFixed(1)}`)
+            .join(' ')
+          return `${top} ${bottom} Z`
+        })()
+      : ''
+
+    return { points, max, min, actualPath, predictedPath, bandPath, actualLen: actual?.length ?? 0, hasBands }
   }, [actual, predicted])
 
   if (!chart) return null
@@ -73,6 +93,9 @@ export default function InflowChart({ forecast }) {
         )}
         {chart.predictedPath && (
           <path d={chart.predictedPath} fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeDasharray="6 4" />
+        )}
+        {chart.bandPath && (
+          <path d={chart.bandPath} fill="#f59e0b" fillOpacity="0.12" stroke="none" />
         )}
         {chart.points.map((p, i) => (
           <circle

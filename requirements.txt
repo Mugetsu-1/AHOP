@@ -1,36 +1,18 @@
-# Core data
-pandas>=2.2
-numpy>=1.26
-faker>=25
-
-# Visualization
-plotly>=5.20
-seaborn>=0.13
-
-# Statistics / survival analysis
-scipy>=1.13
-statsmodels>=0.14
-lifelines>=0.29
-
-# Machine learning
-scikit-learn>=1.5
-lightgbm>=4.4
-xgboost>=2.1
-shap>=0.46
-
 # Optimization
 pulp>=2.8
 highspy>=1.15
 
+# Core data
+pandas>=2.2
+numpy>=1.26
+
 # Backend / API
 fastapi>=0.115
 uvicorn[standard]>=0.30
-sqlalchemy>=2.0
 pydantic>=2.9
-pydantic-settings>=2.5
-python-multipart>=0.0.9
-joblib>=1.4
-psycopg2-binary>=2.9  # PostgreSQL driver (optional; SQLite used by default)
+
+# E2E verification
+websockets>=13
 
 # Testing
 pytest>=8.0
